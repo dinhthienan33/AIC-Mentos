@@ -1,116 +1,151 @@
 # Offline pipeline
 
-This document describes **only what is present in the Mentos source we could read**. It does not invent missing extraction or training steps.
+This document describes **only code that is in this repository**. Missing stages are marked as **not included in this repo** — they are not reconstructed here.
 
-**Private repo checked:** `https://github.com/dinhthienan33/AIC2026-top5` — **inaccessible** from this environment (GitHub 404 / not in the token scope). No files from that repo are in this monorepo. If that repository holds the original keyframe cutter, embedder, or OCR/ASR/caption jobs, it still needs to be granted and copied under `offline/`.
+Two separate paths exist:
 
-What we *do* have:
+1. **`offline/`** — embed already-cut keyframe images from S3 and upsert into Qdrant (OpenCLIP or Jina CLIP v2).
+2. **`backend/scripts/` + `backend/core/prepare_local.py`** — download Hugging Face artifacts (JPEG tars, slim sqlite, a SigLIP2 Qdrant snapshot) and build Elasticsearch indexes for the serving API.
 
-- **Current (AIC 2026) runtime prepare + index scripts** in `backend/scripts/` and `backend/core/prepare_local.py` (from branch `aic2026` of `AIC2025_Mentos-v2`).
-- **Historical (AIC 2025) notebook** `processing.ipynb` on the old `main` branch of that backend — FAISS / metadata merge only. It is **not** copied here (personal Windows paths, no models, notebook outputs).
+They are not the same job. The serving encoder is SigLIP2; the exported indexer uses OpenCLIP / Jina CLIP.
 
 ---
 
-## Current pipeline (AIC 2026) — what the code actually does
+## What is included vs not included
 
-The serving stack assumes artifacts already exist on a Hugging Face dataset (default `HF_REPO_ID=htNghiaaa/aic26-lowres-keyframes`). Local scripts **download and reshape** those artifacts; they do not generate embeddings or run corpus-wide OCR/ASR from raw video.
+| Stage | In this repo? | Where / notes |
+|-------|---------------|---------------|
+| Shot detection / keyframe cutting (TransNet, PySceneDetect, ffmpeg interval, …) | **Not included in this repo** | No cutter, notebook, or history in the exported trees. `offline/` assumes JPEGs already exist on S3. |
+| Corpus OCR / ASR / caption / object-detection **generation** | **Not included in this repo** | No enrichment trainers or extractors. Serving copies those tables from a Hugging Face sqlite dump if present. |
+| Embed keyframes → Qdrant (OpenCLIP `ViT-L-14` or `jinaai/jina-clip-v2`) | **Yes** | `offline/run_indexing.py`, `offline/aic_indexing/*` |
+| Download HF JPEG tars / slim sqlite / restore SigLIP2 Qdrant snapshot | **Yes** | `backend/scripts/extract_*.py`, `backend/core/snapshot.py` |
+| Index copied OCR / ASR / OD / enrichment text into Elasticsearch | **Yes** | `backend/scripts/index_*_to_es.py` |
+| Query-time SigLIP2, PhoWhisper clip ASR, Tesseract screenshot OCR | **Yes (online)** | `backend/core/models.py`, `speech_asr.py`, `screen_ocr.py` — not corpus jobs |
+| CCTV `cams.json` builder | **Not included in this repo** | Runtime expects `CCTV_CAMS_PATH`; no builder under `offline/` or `backend/` |
+
+Source of the indexer: [`offline/SOURCE.txt`](../offline/SOURCE.txt) (`AIC2026-top5` `main` @ `0e2cd1c`). How to run it: [`offline/README.md`](../offline/README.md).
+
+---
+
+## Path A — `offline/` (S3 keyframes → embed → Qdrant)
 
 ```mermaid
 flowchart LR
-    subgraph unknown["Not in this repo — unknown"]
+    S3["S3 keyframe images<br/>already extracted"] --> List["List objects<br/>aic_indexing/s3_utils"]
+    List --> Select["Incremental / full / resume"]
+    Select --> Prefetch["Prefetch chunk"]
+    Prefetch --> Embed["OpenCLIP ViT-L-14<br/>or jina-clip-v2"]
+    Embed --> Meta["Parse path + timestamp<br/>metadata.py"]
+    Meta --> Qdrant["Upsert COSINE points"]
+```
+
+Expected S3 key shape (regex in `offline/aic_indexing/metadata.py`):
+
+```text
+.../keyframes/<batch_folder>/keyframes/<video_id>/<numeric_frame>.<jpg|jpeg|png|webp|bmp|gif>
+```
+
+Example: `keyframes/L21_a/keyframes/L21_V001/123.jpg` → batch `L21`, timestamp `frame_index / KEYFRAME_FPS` (default 25). Non-matching keys are skipped.
+
+### Inputs / outputs
+
+| | |
+|---|---|
+| **Input** | Keyframe objects on S3; AWS credentials; Qdrant URL |
+| **Output** | Qdrant collection with payload `batch_id`, `video_id`, `frame_id`, `s3_uri`, `timestamp`, `frame_index`, `model`, `embedding_dim`, `s3_etag`, `s3_last_modified` |
+| **Models** | Default CLI: OpenCLIP `ViT-L-14` / `datacomp_xl_s13b_b90k` (768-d). Alternative: `jinaai/jina-clip-v2` (1024-d, optional Matryoshka truncate) |
+
+### How to run
+
+```bash
+cd offline
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+# install torch for your CUDA/CPU — see offline/README.md
+cp .env.example .env
+
+python run_indexing.py --s3-uri s3://YOUR_BUCKET/YOUR_PREFIX/
+
+# Jina CLIP v2
+python run_indexing.py \
+  --model-id jinaai/jina-clip-v2 \
+  --model-name jinav2 \
+  --qdrant-collection keyframes_jinav2_final
+```
+
+Modes: incremental (skip unchanged etag + model + dim), `--full-reindex`, `--resume-reindex`. Delete a collection with `python clear_qdrant_collection.py --yes`.
+
+This path does **not** write Elasticsearch, FAISS dumps, or SigLIP2 vectors.
+
+---
+
+## Path B — serving prepare (Hugging Face artifacts → local disk + ES)
+
+The FastAPI stack assumes artifacts already exist on a Hugging Face dataset (default `HF_REPO_ID=htNghiaaa/aic26-lowres-keyframes`). Local scripts **download and reshape**; they do not cut video or embed the corpus.
+
+```mermaid
+flowchart LR
+    subgraph notIncluded["Not included in this repo"]
         V[Raw contest videos]
         CUT[Keyframe cutting]
-        EMB[SigLIP2 embedding]
+        SIG[SigLIP2 corpus embed]
         ENR[OCR / ASR / OD / captions]
     end
 
     subgraph hf["Hugging Face dataset"]
-        TAR["datav3/{shard}/shard_*.tar<br/>JPEG keyframes"]
-        DB["db_v2/{shard}/frame_db.db<br/>sqlite: frames, asr_results, enrichment"]
+        TAR["datav3/{shard}/shard_*.tar"]
+        DB["db_v2/{shard}/frame_db.db"]
         SNAP["qdrant_vectorstore_siglip2_v3/qdrant.snapshot"]
     end
 
     subgraph local["In this repo — prepare + index"]
         EX1["scripts/extract_hf_keyframes.py"]
         EX2["scripts/extract_asr_enrichment.py"]
-        ES["Elasticsearch indexes<br/>OCR / ASR / OD / enrichment"]
-        QDR[(Qdrant collection)]
+        ES["Elasticsearch indexes"]
+        QDR[(Qdrant SigLIP2 collection)]
         JPG["data/keyframes/{video_id}/{frame}.jpg"]
-        SLIM["data/db_mounts/{shard}.db"]
     end
 
     V -.-> CUT -.-> TAR
-    V -.-> EMB -.-> SNAP
+    V -.-> SIG -.-> SNAP
     V -.-> ENR -.-> DB
     TAR --> EX1 --> JPG
-    DB --> EX2 --> SLIM --> ES
+    DB --> EX2 --> ES
     SNAP --> QDR
 ```
 
-### Inputs and outputs (from the scripts)
+| Step | Script / module | Input | Output |
+|------|-----------------|-------|--------|
+| Keyframe extract | `backend/scripts/extract_hf_keyframes.py` | HF tars under `HF_KEYFRAME_PREFIX` | `{KEYFRAME_LOCAL_DIR}/{video_id}/{frame}.jpg` |
+| Slim sqlite | `backend/scripts/extract_asr_enrichment.py` | HF `frame_db.db` | `{DB_MOUNT_DIR}/{shard}.db` (`asr_results`, `enrichment`) |
+| FPS fill | `backend/scripts/fill_fps_from_hf.py` | sqlite `frames.fps` | Updates `urls.csv` `fps` |
+| Qdrant restore | `backend/core/snapshot.py` | HF `*.snapshot` | Collection `QDRANT_COLLECTION` (default `siglip2_keyframes_final`) |
+| ES OCR / ASR / OD / enrichment | `backend/scripts/index_*_to_es.py` | Slim sqlite | Elasticsearch indexes used at query time |
 
-| Step | Script / module | Input | Output | Tools / models named in code |
-|------|-----------------|-------|--------|------------------------------|
-| Keyframe extract | `backend/scripts/extract_hf_keyframes.py` | HF tars under `HF_KEYFRAME_PREFIX` (default `datav3`) | `{KEYFRAME_LOCAL_DIR}/{video_id}/{frame_idx:06d}.jpg` plus `.extract_complete` | `huggingface_hub` |
-| Slim sqlite | `backend/scripts/extract_asr_enrichment.py` | HF `db_v2/{shard}/frame_db.db` | `{DB_MOUNT_DIR}/{shard}.db` with `asr_results`, `enrichment` (+ FTS), thin `frames` map | Python `sqlite3` |
-| FPS fill | `backend/scripts/fill_fps_from_hf.py` | Same sqlite `frames.fps` | Updates `urls.csv` `fps` column | — |
-| Qdrant restore | `backend/core/snapshot.py` | HF `*.snapshot` (default `qdrant_vectorstore_siglip2_v3/qdrant.snapshot`) | Restored collection `QDRANT_COLLECTION` (default `siglip2_keyframes_final`) | Qdrant, `huggingface_hub` |
-| ES OCR | `scripts/index_ocr_to_es.py` → `core/es_ocr.py` | Slim sqlite enrichment / OCR quotes | Index `ocr_keyframes` | Elasticsearch 8.15 |
-| ES ASR | `scripts/index_asr_to_es.py` → `core/es_asr.py` | Slim sqlite `asr_results` | Index `asr_segments` | Elasticsearch 8.15 |
-| ES OD | `scripts/index_od_to_es.py` → `core/es_od.py` | Slim sqlite enrichment entities | Index `od_entities` | Elasticsearch 8.15 |
-| ES enrichment | `scripts/index_enrichment_to_es.py` → `core/es_enrichment.py` | Slim sqlite enrichment | Index `enrichment_keyframes` (used by hybrid search) | Elasticsearch 8.15 |
-| Optional local GPU index | `backend/core/local_index.py` | Prebuilt `vectors_fp16.npy` + `meta.jsonl` | In-memory cosine top-k | PyTorch — **no builder script in repo** |
-| Query-time encoder | `backend/core/models.py` | Text query | SigLIP2 embedding | `google/siglip2-so400m-patch14-384` |
-| Contest clip ASR | `backend/core/speech_asr.py` | Uploaded audio | Transcript | `vinai/PhoWhisper-*` (default medium) |
-| Contest screenshot OCR | `backend/core/screen_ocr.py` | Uploaded image | Text | Tesseract `vie+eng` |
-
-`python run.py` calls `core/prepare_local.py`, which runs keyframe extract + slim-db extract (unless `PREPARE_LOCAL_DATA=false`), then starts local ES if needed and indexes OCR/ASR/OD/enrichment (unless `PREPARE_ELASTICSEARCH=false`).
-
-### How to run (scripts that exist)
-
-From `backend/` after `cp .env.example .env` and setting `HF_TOKEN` (dataset is treated as gated in the scripts):
+`python run.py` calls `core/prepare_local.py` unless `PREPARE_LOCAL_DATA=false` / `PREPARE_ELASTICSEARCH=false`.
 
 ```bash
-# 1. Keyframes (~several GiB). Tars are deleted from the HF cache after extract unless --keep-tars.
+cd backend
+cp .env.example .env   # set HF_TOKEN
 python scripts/extract_hf_keyframes.py
-
-# 2. Slim sqlite (ASR + enrichment/OCR/OD; full frame_db is not kept).
 python scripts/extract_asr_enrichment.py
-
-# 3. Elasticsearch (or let run.py do this).
 bash scripts/run_elasticsearch.sh
 python scripts/index_ocr_to_es.py
 python scripts/index_asr_to_es.py
 python scripts/index_od_to_es.py
 python scripts/index_enrichment_to_es.py
-# Reindex: add --reindex
-
-# 4. Optional: copy fps from sqlite into urls.csv
-python scripts/fill_fps_from_hf.py
 ```
 
-Qdrant: run a local node, then start the API with `AUTO_RESTORE_SNAPSHOT=true` so `core/snapshot.py` downloads the snapshot and restores it. Image search can skip sqlite (`SKIP_DB_MOUNT=true` by default) and use `DEFAULT_FPS` (25) for timestamps.
-
-### Unknowns (not in the accessible repos)
-
-- How raw videos were cut into keyframes (interval, TransNet, scene detect, …). Only the resulting JPEG tars are consumed.
-- How SigLIP2 vectors and the Qdrant snapshot were built. No embedding-to-Qdrant job is in `AIC2025_Mentos-v2`.
-- How corpus OCR, ASR, object entities, and captions were written into `frame_db.db`. The extract script **copies** those tables; it does not run OCR/ASR/caption models over the corpus.
-- How `data/local_index/vectors_fp16.npy` would be produced. `local_index.py` only loads it.
-- `cams.json` for CCTV clock search: expected at `CCTV_CAMS_PATH`; the builder (`aic_tools/cctv`) is **not** in this repo.
-- Anything that lives only in `AIC2026-top5`.
+Qdrant: start a local node, then run the API with `AUTO_RESTORE_SNAPSHOT=true`.
 
 ---
 
-## Historical pipeline (AIC 2025 `main`) — notebook only
+## Not included in this repo (do not invent)
 
-`processing.ipynb` on the old backend `main` branch (not copied) did **local merge work** on a Windows path `D:\3rd\AIC2025\Mentos\...`:
+- How raw videos were cut into keyframes (interval, TransNet, scene detect, …).
+- How the SigLIP2 Qdrant snapshot on Hugging Face was built. There is no SigLIP2 embed-to-Qdrant job in `offline/` or `backend/scripts/`.
+- How corpus OCR, ASR, captions, and object entities were written into `frame_db.db`. Extract scripts **copy** those tables only.
+- How `data/local_index/vectors_fp16.npy` would be produced (`backend/core/local_index.py` only loads it).
+- A builder for `cams.json` (CCTV clock search).
 
-1. Read `media-info-aic25-b1/media-info/*.json` (notebook printed **873** files) for YouTube / thumbnail URLs.
-2. Join `metadata/map-keyframes/*.csv` fps with `dataset/urls.csv` → `metadata_v2.csv`.
-3. Merge FAISS `.bin` shards (notebook output: `blip2-base_0_10000_indexing.bin`, `blip2-base_10001_100001_indexing.bin`, `blip2.bin` → `blip2_indexing.bin`).
-4. Merge path JSON shards (`image_path_0_10000.json`, …) — notebook output: **123,393** items in `image_path_beit3_blip2.json`.
-
-**Unknown there too:** who extracted those keyframes, which encoder wrote the FAISS shards (filenames mention BLIP-2 / BEIT-3 / Jina; the later serving code on `main` used Jina CLIP v2), and how MongoDB Atlas ASR/OD collections were filled. `core/ocr_search.py` on `main` was a stub.
-
-That stack (Azure Blob + FAISS + Mongo + Groq) was **replaced** on `aic2026` by Hugging Face + Qdrant + Elasticsearch + SigLIP2. Do not mix the two setups.
+If those jobs exist elsewhere, they were not in the exported `AIC2026-top5` offline slice or the sanitized `aic2026` backend.

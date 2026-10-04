@@ -1,52 +1,72 @@
 # Mentos
 
-Interactive **video event retrieval** for [AI Challenge HCMC 2026](https://aichallenge.vn/) — search a large news / CCTV / cycling corpus with natural language (including Vietnamese), then jump to the matching shot.
+Interactive **video event retrieval** for [AI Challenge HCMC 2026](https://aichallenge.hochiminhcity.gov.vn/) — search a large news / CCTV / cycling corpus with natural language (including Vietnamese), then jump to the matching shot and submit it to the contest evaluation server.
 
-**AIC 2026 Finalist · 811 teams**
+**AIC 2026 Finalist out of 811 teams.**
 
-| | |
-|---|---|
-| **Live UI** | [aic2025-mentos-frontend.vercel.app](https://aic2025-mentos-frontend.vercel.app) (login gated; source repo was not available when this tree was assembled) |
-| **This repo** | Clean monorepo: FastAPI backend + docs. No git history from the old private repos. |
-| **Backend origin** | `aic2026` branch of `AIC2025_Mentos-v2` (newest complete line, 2026-09-26) |
-
-![Login screen of the public Visual Search demo](docs/assets/frontend-login.png)
+This public monorepo is a cleaned, secret-scanned export of the Mentos stack: FastAPI retrieval API, React operator UI, and the offline embed → Qdrant indexer that exists in source. Shot detection, keyframe cutting, and corpus OCR / ASR / caption / object-detection jobs are **not included** (they were not in the exported trees).
 
 ---
 
-## What it does
+## Screenshots
 
-Contest queries ask for a precise moment in thousands of videos. Mentos:
+UI captured locally with dummy login env vars and **no live backend** (empty search / CCTV results).
 
-1. Embeds the query with **SigLIP2** and retrieves keyframes from **Qdrant** (optional local GPU index).
-2. Optionally translates or splits multi-event queries with an LLM.
-3. Filters or boosts with **OCR / ASR / object-entity** text in **Elasticsearch**.
-4. Returns ranked keyframes with timestamps and video URLs (`urls.csv`: **1,487** videos).
-
-The public demo UI (Create React App on Vercel) adds search tabs, a DRES submit bar, a voice tab, and CCTV playback. That source is **not** in this repository — see [frontend/README.md](frontend/README.md).
+| Login gate | Visual search | CCTV tab |
+|---|---|---|
+| [![Login](docs/assets/01-login.png)](docs/assets/01-login.png) | [![Visual search](docs/assets/02-visual-search.png)](docs/assets/02-visual-search.png) | [![CCTV](docs/assets/03-cctv.png)](docs/assets/03-cctv.png) |
 
 ---
 
 ## Architecture
 
+Offline indexing (what is in this repo) embeds **already-cut** S3 keyframes and upserts them to Qdrant. The serving stack also consumes a Hugging Face dataset (JPEG tars, slim sqlite, a SigLIP2 Qdrant snapshot) and builds Elasticsearch indexes from copied enrichment tables. The React UI queries FastAPI and submits shots to DRES through a backend proxy.
+
 ```mermaid
-flowchart TB
-    FE[React UI]
-    API[FastAPI Mentos API]
-    Q[Qdrant SigLIP2]
-    ES[Elasticsearch OCR / ASR / OD]
-    HF[Hugging Face artifacts]
-    FE --> API
-    API --> Q
-    API --> ES
-    HF --> API
+flowchart LR
+    subgraph offline["Offline — in repo: offline/"]
+        S3["S3 keyframe JPEGs<br/>already cut"]
+        EMB["OpenCLIP ViT-L-14<br/>or jina-clip-v2"]
+        S3 --> EMB
+    end
+
+    subgraph missing["Not included in this repo"]
+        CUT["Shot detection / keyframe cutting"]
+        ENR["OCR / ASR / caption / OD jobs"]
+    end
+
+    subgraph indexes["Indexes"]
+        Q[("Qdrant<br/>vectors + payload")]
+        ES[("Elasticsearch<br/>OCR / ASR / OD / enrichment")]
+        HF["Hugging Face artifacts<br/>JPEGs + slim sqlite + SigLIP2 snapshot"]
+    end
+
+    subgraph serve["Online — backend/"]
+        API["FastAPI<br/>SigLIP2 + Qdrant + ES<br/>PhoWhisper / Tesseract / CCTV"]
+    end
+
+    subgraph ui["frontend/"]
+        FE["Create React App<br/>search tabs + DRES dock"]
+    end
+
+    DRES["DRES evaluation server"]
+
+    EMB --> Q
+    HF --> Q
+    HF --> ES
+    ENR -.-> HF
+    CUT -.-> S3
+    Q --> API
+    ES --> API
+    FE -->|HTTPS /search, /cctv, …| API
+    FE -->|POST /dres-proxy| API --> DRES
 ```
 
-Full diagram and API map: [docs/architecture.md](docs/architecture.md).
+Details: [docs/architecture.md](docs/architecture.md). Offline stages and gaps: [docs/offline-pipeline.md](docs/offline-pipeline.md).
 
 ---
 
-## Features (implemented in the backend we shipped)
+## Features
 
 | Feature | Where |
 |---------|--------|
@@ -60,21 +80,25 @@ Full diagram and API map: [docs/architecture.md](docs/architecture.md).
 | Contest screenshot OCR | Tesseract vie+eng (`POST /ocr-image`) |
 | CCTV clock → frame | `/cctv/*` (needs a `cams.json` not in git) |
 | DRES CORS proxy | `POST /dres-proxy` |
-| Optional Bunny playback URLs | `bunny_client.py` |
+| Operator UI | React tabs: visual, ASR, OD, OCR, CCTV, screenshot OCR, voice; DRES submit bar |
+| Offline embed + upsert | `offline/run_indexing.py` (S3 keyframes → OpenCLIP / Jina CLIP → Qdrant) |
 
-No latency numbers are claimed here. Older notes on a sibling branch described a different FAISS/Mongo stack.
+No latency or rank numbers are claimed here. The serving encoder is **SigLIP2**; the exported offline indexer uses **OpenCLIP / Jina CLIP v2** (a different, earlier index path).
 
 ---
 
 ## Tech stack
 
 - **API:** Python, FastAPI, Uvicorn, Pydantic v2
-- **Vectors:** Qdrant, `google/siglip2-so400m-patch14-384` (Hugging Face Transformers / PyTorch)
-- **Text indexes:** Elasticsearch 8.15
-- **Media catalog:** `urls.csv`; optional Bunny Stream
-- **LLM:** OpenAI-compatible API (optional Groq key still listed in settings)
-- **Deploy helpers:** Docker Compose, Caddy
-- **Frontend (deploy only):** Create React App on Vercel
+- **Query encoder:** `google/siglip2-so400m-patch14-384` (Hugging Face Transformers / PyTorch)
+- **Vectors (serve):** Qdrant (default collection `siglip2_keyframes_final`)
+- **Vectors (offline export):** OpenCLIP `ViT-L-14` / `jinaai/jina-clip-v2` → Qdrant
+- **Text indexes:** Elasticsearch 8.15 (OCR / ASR / OD / enrichment)
+- **Media catalog:** `backend/urls.csv` (1,487 videos); optional Bunny Stream
+- **Contest helpers:** `vinai/PhoWhisper-*`, Tesseract `vie+eng`
+- **LLM (optional):** OpenAI-compatible API for translate / temporal split
+- **UI:** React 18, Create React App (`react-scripts` 5)
+- **Deploy helpers:** Docker Compose, Caddy; frontend can deploy as a static SPA
 
 ---
 
@@ -84,25 +108,32 @@ No latency numbers are claimed here. Older notes on a sibling branch described a
 .
 ├── README.md
 ├── LICENSE                 # not yet specified
-├── .env.example
-├── backend/                # FastAPI app (from aic2026)
+├── .env.example            # pointers to per-package examples
+├── backend/                # FastAPI app
 │   ├── api.py
 │   ├── run.py
 │   ├── core/
 │   ├── schema/
-│   ├── scripts/            # HF extract + ES index (not full offline ingest)
-│   ├── test_cases/         # Excel sources + eval builders
+│   ├── scripts/            # HF extract + ES index (not corpus embedding)
+│   ├── test_cases/
 │   └── .env.example
-├── frontend/               # placeholder — GitHub source inaccessible
+├── frontend/               # cleaned CRA app (AIC2025_Mentos_frontend @ fe52014)
+│   ├── src/
+│   ├── .env.example
+│   └── README.md
+├── offline/                # S3 → OpenCLIP / Jina → Qdrant (from AIC2026-top5)
+│   ├── run_indexing.py
+│   ├── aic_indexing/
+│   └── .env.example
 └── docs/
     ├── architecture.md
     ├── offline-pipeline.md
-    └── assets/
+    └── assets/             # UI screenshots
 ```
 
 ---
 
-## Setup
+## Quick start
 
 ### Backend
 
@@ -115,56 +146,78 @@ docker run -p 6333:6333 -p 6334:6334 qdrant/qdrant:v1.13.2
 python run.py
 ```
 
-Details: [backend/README.md](backend/README.md). First start may download keyframes and a Qdrant snapshot (`HF_TOKEN`, several GiB).
+Details: [backend/README.md](backend/README.md). First start may download keyframes and a Qdrant snapshot (`HF_TOKEN`, several GiB). Skip with `PREPARE_LOCAL_DATA=false` / `PREPARE_ELASTICSEARCH=false`.
 
 ### Frontend
 
-Source is missing. Point a local checkout of `AIC2025_Mentos_frontend` at this API with:
+```bash
+cd frontend
+cp .env.example .env
+# set REACT_APP_AUTH_USERNAME / REACT_APP_AUTH_PASSWORD (required to pass the login gate)
+# set REACT_APP_API_URL=http://localhost:8000  (or leave empty to use the CRA proxy)
+npm install
+npm start
+```
+
+Open `http://localhost:3000`. Full env list: [frontend/README.md](frontend/README.md).
+
+### Offline indexing
 
 ```bash
-REACT_APP_API_URL=http://localhost:8000
-REACT_APP_BACKEND_ORIGIN=http://localhost:8000
+cd offline
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt   # install torch for your CUDA/CPU first; see offline/README.md
+cp .env.example .env              # AWS + Qdrant
+python run_indexing.py --s3-uri s3://YOUR_BUCKET/YOUR_PREFIX/
 ```
+
+This stage expects **keyframes already on S3**. It does not cut video or run OCR/ASR.
 
 ---
 
 ## Environment variables
 
-Secrets belong in `backend/.env` / `frontend/.env` only. Placeholders:
+Secrets belong in local `.env` files only. Never commit real values.
 
-| Variable | Used for |
-|----------|----------|
-| `HF_TOKEN` / `HF_TOKEN_WRITE` | Download HF keyframes, sqlite, Qdrant snapshot |
-| `HF_REPO_ID` | Dataset repo (default `htNghiaaa/aic26-lowres-keyframes`) |
-| `QDRANT_URL` / `QDRANT_API_KEY` / `QDRANT_COLLECTION` | Vector store |
-| `OPENAI_API_KEY` or `OPEN_AI_API_KEY` | Translate / temporal split |
-| `GROQ_API_KEY` | Still loaded in settings; current query client is OpenAI |
-| `ELASTICSEARCH_URL` and `ELASTICSEARCH_*_INDEX` | OCR / ASR / OD / enrichment |
-| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | Optional S3 if `KEYFRAME_SOURCE` is not `hf` |
-| `BUNNY_LIBRARY_ID` / `BUNNY_API_KEY` / `BUNNY_CDN_HOST` | Hosted video playback |
-| `ASR_WHISPER_MODEL` | PhoWhisper size or hub id |
-| `CCTV_CAMS_PATH` | CCTV clock index JSON |
-| `CORS_ORIGINS` / `PUBLIC_BASE_URL` / `HOST` / `PORT` | HTTP |
-| `REACT_APP_API_URL` / `REACT_APP_BACKEND_ORIGIN` | Frontend → API |
+| Variable | Package | Purpose |
+|----------|---------|---------|
+| `HF_TOKEN` / `HF_TOKEN_WRITE` | backend | Download HF keyframes, sqlite, Qdrant snapshot |
+| `HF_REPO_ID` | backend | Dataset repo (default `htNghiaaa/aic26-lowres-keyframes`) |
+| `QDRANT_URL` / `QDRANT_API_KEY` / `QDRANT_COLLECTION` | backend, offline | Vector store |
+| `OPENAI_API_KEY` or `OPEN_AI_API_KEY` | backend | Translate / temporal split |
+| `GROQ_API_KEY` | backend | Still loaded in settings; current query client is OpenAI |
+| `ELASTICSEARCH_URL` and `ELASTICSEARCH_*_INDEX` | backend | OCR / ASR / OD / enrichment |
+| `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` | backend, offline | S3 (offline indexer; optional backend if `KEYFRAME_SOURCE` is not `hf`) |
+| `S3_URI` / `S3_BUCKET_NAME` / `S3_PREFIX` | offline | Keyframe object prefix |
+| `BUNNY_LIBRARY_ID` / `BUNNY_API_KEY` / `BUNNY_CDN_HOST` | backend | Hosted video playback |
+| `ASR_WHISPER_MODEL` | backend | PhoWhisper size or hub id |
+| `CCTV_CAMS_PATH` | backend | CCTV clock index JSON |
+| `CORS_ORIGINS` / `PUBLIC_BASE_URL` / `HOST` / `PORT` | backend | HTTP |
+| `REACT_APP_API_URL` / `REACT_APP_BACKEND_ORIGIN` | frontend | Browser → API origin |
+| `REACT_APP_AUTH_USERNAME` / `REACT_APP_AUTH_PASSWORD` | frontend | Client-side login gate (visible in the JS bundle) |
+| `REACT_APP_DRES_URL` | frontend | Default DRES URL in the submit bar |
+| `BACKEND_URL` | frontend (dev) | CRA proxy target |
 
-Full list with defaults: [backend/.env.example](backend/.env.example).
+Full names and defaults:
+
+- [`.env.example`](.env.example) (pointers)
+- [`backend/.env.example`](backend/.env.example)
+- [`frontend/.env.example`](frontend/.env.example)
+- [`offline/.env.example`](offline/.env.example)
 
 ---
 
-## Offline pipeline
+## Credits
 
-**Included here:** download/extract/index scripts only (`backend/scripts/`, `core/prepare_local.py`). They consume a Hugging Face dataset (JPEG tars, slim sqlite, Qdrant snapshot) and build Elasticsearch indexes.
+- **Đinh Thiên Ân** ([@dinhthienan33](https://github.com/dinhthienan33)) — backend history, offline commits, frontend `siteInfo` author.
+- Frontend cleaned from `AIC2025_Mentos_frontend` `main` @ `fe52014` (Vercel production).
+- Offline indexer cleaned from `AIC2026-top5` `main` @ `0e2cd1c`.
+- Serving backend sanitized from the `aic2026` line of `AIC2025_Mentos-v2`.
 
-**Not included:** original keyframe cutting, corpus embedding, OCR/ASR/caption jobs. The private repo `AIC2026-top5` was checked and **could not be cloned** (404). See [docs/offline-pipeline.md](docs/offline-pipeline.md).
-
----
-
-## Team
-
-From git history of the accessible backend: **Đinh Thiên Ân** ([@dinhthienan33](https://github.com/dinhthienan33)). No other human commit authors appear on `main`, `aic2026`, or `hierachical`. Frontend authors could not be listed (repo inaccessible).
+No other human commit authors appear on the exported histories we copied.
 
 ---
 
 ## License
 
-**Not yet specified.**
+**Not yet specified.** See [LICENSE](LICENSE).
