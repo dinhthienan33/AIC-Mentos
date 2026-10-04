@@ -39,8 +39,7 @@ backend/datav2/
 **/*.onnx
 **/*.safetensors
 
-# Tunnel / TLS credentials (never commit)
-cloudflared/
+# Local credentials (never commit)
 **/*.pem
 **/*credentials*.json
 **/*.p12

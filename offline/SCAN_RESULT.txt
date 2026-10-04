@@ -1,3 +1,0 @@
-gitleaks dir (v8.30.1): no leaks found (exit 0). Report: [].
-trufflehog filesystem (v3.96.0): verified_secrets=0, unverified_secrets=0 (exit 0).
-Scanned path: this offline/ directory after cleaning.

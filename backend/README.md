@@ -7,7 +7,7 @@ Interactive docs after start: `http://localhost:8000/docs`. Root `/` is 404 by d
 ## Requirements
 
 - Python 3.10+
-- Optional: CUDA, Docker (Compose file starts Elasticsearch + Caddy + API)
+- Optional: CUDA, Docker (Compose file starts **local** Qdrant + Elasticsearch only)
 - Hugging Face token for the keyframe / sqlite / Qdrant snapshot dataset
 - Local disk on the order of **several to ~8 GiB** if you extract keyframes
 
@@ -19,7 +19,7 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 cp .env.example .env
-# edit .env — at least HF_TOKEN, and OPENAI_API_KEY if you need translate/temporal
+# edit .env — empty secret names only; set HF_TOKEN, and OPENAI_API_KEY if you need translate/temporal
 ```
 
 GPU torch (optional, from the comments in `requirements.txt`):
@@ -29,23 +29,23 @@ pip install torch torchvision --index-url https://download.pytorch.org/whl/cu128
 pip install -r requirements.txt
 ```
 
-Start Qdrant, then the API (this also prepares local `data/` and ES unless you disable the flags):
+Start local Qdrant + Elasticsearch, then the API (this also prepares local `data/` and ES unless you disable the flags):
+
+```bash
+docker compose up -d
+python run.py
+```
+
+Skip downloads: `PREPARE_LOCAL_DATA=false`. Skip ES: `PREPARE_ELASTICSEARCH=false`.
+
+If you already have Elasticsearch on `:9200` via Compose, set `START_ELASTICSEARCH=false`. You can also run Qdrant alone:
 
 ```bash
 docker run -p 6333:6333 -p 6334:6334 qdrant/qdrant:v1.13.2
 python run.py
 ```
 
-Skip downloads: `PREPARE_LOCAL_DATA=false`. Skip ES: `PREPARE_ELASTICSEARCH=false`.
-
-### Docker Compose
-
-```bash
-cp .env.example .env
-docker compose up --build
-```
-
-Caddy listens on port 80 (`CADDY_DOMAIN`, default `localhost`). The API container is not published on 8000.
+The API listens on `http://localhost:8000`.
 
 ## API (summary)
 
@@ -80,4 +80,4 @@ python test_cases/build_test_suite.py
 python test_cases/eval_suite.py
 ```
 
-Environment variables: see `.env.example` and the table in the [root README](../README.md#environment-variables). Offline extract/index steps: [docs/offline-pipeline.md](../docs/offline-pipeline.md).
+Environment variables: see `.env.example` and the table in the [root README](../README.md#environment-variables). How keyframes / ASR / OCR land in Qdrant and Elasticsearch: [docs/offline-pipeline.md](../docs/offline-pipeline.md).

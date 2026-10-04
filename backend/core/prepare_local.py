@@ -1,6 +1,6 @@
 """Pull local `data/` assets from Hugging Face before the API serves traffic.
 
-First `python run.py` (or Docker `CMD`) downloads:
+First `python run.py` downloads:
 
 - `datav3/keyframes/` from `datav3/{shard}/shard_*.tar`
 - `datav3/db_mounts/{shard}.db` (ASR + OCR/OD enrichment only, from `db_v2/` — HF has no `db_v3`)

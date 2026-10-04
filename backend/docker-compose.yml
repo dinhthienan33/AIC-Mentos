@@ -1,53 +1,24 @@
+# Local development only: Qdrant + Elasticsearch on localhost.
+# Run the API with `python run.py` and the UI with `cd frontend && npm start`.
 services:
-  api:
-    build: .
-    expose:
-      - "8000"
-    env_file:
-      - .env
-    environment:
-      HOST: "0.0.0.0"
-      PORT: "8000"
-      AUTO_RESTORE_SNAPSHOT: "false"
-      SKIP_DB_MOUNT: "true"
-      MODEL_CACHE_DIR: /app/data/model_cache
-      DB_MOUNT_DIR: /app/data/db_mounts
-      KEYFRAME_LOCAL_DIR: /app/data/keyframes
-      ELASTICSEARCH_URL: http://elasticsearch:9200
-      ELASTICSEARCH_INDEX: ocr_keyframes
-      ELASTICSEARCH_ASR_INDEX: asr_segments
-      ELASTICSEARCH_OD_INDEX: od_entities
-      ELASTICSEARCH_ENRICHMENT_INDEX: enrichment_keyframes
-      START_ELASTICSEARCH: "false"
-      HF_HOME: /app/data/model_cache
-      TRANSFORMERS_CACHE: /app/data/model_cache
-      HUGGINGFACE_HUB_CACHE: /app/data/model_cache
+  qdrant:
+    image: qdrant/qdrant:v1.13.2
+    ports:
+      - "6333:6333"
+      - "6334:6334"
     volumes:
-      - api_model_cache:/app/data/model_cache
-      - api_db_mounts:/app/data/db_mounts
-      - api_keyframes:/app/data/keyframes
-    restart: unless-stopped
-    depends_on:
-      elasticsearch:
-        condition: service_healthy
-    healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
-      interval: 15s
-      timeout: 10s
-      retries: 40
-      start_period: 600s
+      - qdrant_data:/qdrant/storage
 
   elasticsearch:
     image: docker.elastic.co/elasticsearch/elasticsearch:8.15.3
-    restart: unless-stopped
     environment:
       discovery.type: single-node
       xpack.security.enabled: "false"
       xpack.ml.enabled: "false"
       ingest.geoip.downloader.enabled: "false"
       ES_JAVA_OPTS: "-Xms512m -Xmx512m"
-    expose:
-      - "9200"
+    ports:
+      - "9200:9200"
     volumes:
       - es_data:/usr/share/elasticsearch/data
     healthcheck:
@@ -56,27 +27,6 @@ services:
       timeout: 5s
       retries: 30
 
-  caddy:
-    image: caddy:2-alpine
-    restart: unless-stopped
-    ports:
-      - "80:80"
-      - "443:443"
-      - "443:443/udp"
-    environment:
-      CADDY_DOMAIN: ${CADDY_DOMAIN:-localhost}
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data
-      - caddy_config:/config
-    depends_on:
-      api:
-        condition: service_healthy
-
 volumes:
-  api_model_cache:
-  api_db_mounts:
-  api_keyframes:
+  qdrant_data:
   es_data:
-  caddy_data:
-  caddy_config:
