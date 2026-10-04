@@ -1,0 +1,29 @@
+Extracted from (read-only; this export is not a git commit on the source repo):
+
+  repository: https://github.com/dinhthienan33/AIC2026-top5
+  branch:     main (only branch; origin/HEAD -> origin/main)
+  HEAD:       0e2cd1c631d728977d3714bfda6e96b6daf8910c
+
+Commits on main (oldest first):
+
+  e90d56cbe47252892db69f21b6c286e6b204a74e
+    Cursor Agent <cursor-agent@users.noreply.github.com>
+    2026-06-14 16:27:39 +0000
+    Initial combined AIC2026 source.
+    (introduced aic_indexing/, run_indexing.py, clear_qdrant_collection.py,
+     plus the FastAPI backend and React frontend)
+
+  e368434098a2db84e570f46dc802280ea7f4029f
+    dinhthienan33 <dithienan03@gmail.com>
+    2026-06-18 07:23:11 +0700
+    add metadata
+    (backend/data/metadata.csv only — not included in this export)
+
+  0e2cd1c631d728977d3714bfda6e96b6daf8910c
+    dinhthienan33 <dithienan03@gmail.com>
+    2026-06-18 15:10:44 +0700
+    add metadata processing
+    (backend/frontend metadata wiring — not included in this export)
+
+No tags, stashes, or other remote heads existed at export time.
+The offline Python modules themselves were last changed in e90d56c.
