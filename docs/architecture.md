@@ -1,6 +1,6 @@
 # Architecture
 
-Mentos is an interactive video event-retrieval system built for **AI Challenge HCMC 2026**. This tree is the sanitized **`aic2026` backend** plus the cleaned React operator UI (`frontend/`). End-to-end flow: [root README](../README.md). How indexes were (and were not) built: [offline-pipeline.md](./offline-pipeline.md).
+Mentos is an interactive video event-retrieval system built for **AI Challenge HCMC 2026**. This tree is the sanitized **`aic2026` backend**, the cleaned React operator UI (`frontend/`), and the S3 → CLIP → Qdrant indexer (`offline/`). End-to-end flow: [root README](../README.md). Offline stages and how to run the indexer: [offline-pipeline.md](./offline-pipeline.md).
 
 ```mermaid
 flowchart TB
@@ -66,4 +66,4 @@ Other HTTP routes: `/filter-search`, `/asr-search`, `/ocr-search`, `/frames/...`
 
 `main` (2025-09) served FAISS + Azure Blob + MongoDB Atlas + Groq. `aic2026` deleted that path (`core/search2.py`, `azure_client.py`, FAISS bins) and moved to Qdrant + HF + ES. This monorepo follows `aic2026` only.
 
-How the SigLIP2 snapshot and corpus OCR/ASR/OD tables were *created* is **not included in this repo** — see [offline-pipeline.md](./offline-pipeline.md). An earlier OpenCLIP / Jina S3 indexer existed in a removed `offline/` export; it is described there, not shipped as code.
+How the SigLIP2 snapshot and corpus OCR/ASR/OD tables were *created* is **not included in this repo**. The OpenCLIP / Jina S3 indexer **is** in [`offline/`](../offline/); it is a different collection from the serving SigLIP2 snapshot — see [offline-pipeline.md](./offline-pipeline.md).

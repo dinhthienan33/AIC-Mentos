@@ -1,11 +1,11 @@
 # Offline pipeline
 
-This repo ships the **serving** stack (FastAPI + React) and the scripts that **reshape already-built artifacts** into local files and Elasticsearch. It does **not** include the jobs that cut video, embed the SigLIP2 corpus, or generate corpus OCR / ASR / captions / object entities.
+This repo ships the **serving** stack (FastAPI + React), the **`offline/`** S3 → OpenCLIP / Jina CLIP → Qdrant indexer, and the backend scripts that **reshape already-built artifacts** into local files and Elasticsearch. It does **not** include the jobs that cut video, embed the SigLIP2 corpus, or generate corpus OCR / ASR / captions / object entities.
 
 What follows is reconstructed from:
 
-- the **backend** indexers and sqlite slimming code that are still in git
-- the **removed** `offline/` tree (cleaned export of `AIC2026-top5` `main` @ `0e2cd1c`) — documented here so the old S3 → CLIP → Qdrant path is not lost
+- [`offline/`](../offline/) — cleaned export of `AIC2026-top5` `main` @ `0e2cd1c` (how to run: [`offline/README.md`](../offline/README.md))
+- the **backend** indexers and sqlite slimming code
 
 Unknowns are marked. No throughput, VRAM, or corpus-size numbers are claimed.
 
@@ -29,7 +29,7 @@ flowchart TB
         SNAP["qdrant_vectorstore_siglip2_v3/qdrant.snapshot"]
     end
 
-    subgraph removed["Removed offline/ indexer — S3 keyframes already cut"]
+    subgraph offlineIdx["offline/ — S3 keyframes already cut"]
         S3["S3 JPEGs<br/>keyframes/&lt;batch&gt;/keyframes/&lt;video&gt;/&lt;n&gt;.jpg"]
         CLIP["OpenCLIP ViT-L-14 or jina-clip-v2"]
         QOLD[("Qdrant COSINE<br/>not the serving collection")]
@@ -54,7 +54,7 @@ flowchart TB
     SNAP --> QDR
 ```
 
-Serving search uses **SigLIP2** vectors (`QDRANT_COLLECTION`, default `siglip2_keyframes_final`) plus the Elasticsearch indexes below. The removed offline indexer wrote a **different** collection (default `keyframes_clip` / optional `keyframes_jinav2_final`) with OpenCLIP or Jina CLIP. Those two vector stores are not interchangeable.
+Serving search uses **SigLIP2** vectors (`QDRANT_COLLECTION`, default `siglip2_keyframes_final`) plus the Elasticsearch indexes below. `offline/` writes a **different** collection (default `keyframes_clip` / optional `keyframes_jinav2_final`) with OpenCLIP or Jina CLIP. Those two vector stores are not interchangeable.
 
 ---
 
@@ -62,9 +62,9 @@ Serving search uses **SigLIP2** vectors (`QDRANT_COLLECTION`, default `siglip2_k
 
 ### Cutting (not in this repo)
 
-No shot detector, ffmpeg interval cutter, TransNet, or PySceneDetect job is in the backend or was in the removed `offline/` tree. Both paths assumed keyframes **already existed**.
+No shot detector, ffmpeg interval cutter, TransNet, or PySceneDetect job is in the backend or `offline/`. Both paths assumed keyframes **already existed**.
 
-The removed indexer required S3 keys matching:
+`offline/aic_indexing/metadata.py` requires S3 keys matching:
 
 ```text
 .../keyframes/<batch_folder>/keyframes/<video_id>/<numeric_frame>.<jpg|jpeg|png|webp|bmp|gif>
@@ -112,9 +112,9 @@ There is **no** SigLIP2 embed-to-Qdrant job in this repo. How the snapshot was t
 
 Optional exact GPU search (`core/local_index.py`) loads `data/local_index/vectors_fp16.npy` if present. Nothing in git writes that file.
 
-### Removed offline indexer (OpenCLIP / Jina)
+### `offline/` indexer (OpenCLIP / Jina)
 
-From the deleted `offline/run_indexing.py` + `offline/aic_indexing/*`:
+Code: [`offline/run_indexing.py`](../offline/run_indexing.py) + [`offline/aic_indexing/`](../offline/aic_indexing/). How to run locally: [`offline/README.md`](../offline/README.md).
 
 1. List image objects on S3.
 2. Skip unchanged points (same `s3_etag` + `model` + `embedding_dim`), or `--full-reindex` / `--resume-reindex`.
@@ -130,7 +130,32 @@ From the deleted `offline/run_indexing.py` + `offline/aic_indexing/*`:
 
 Payload written on each point: `batch_id`, `video_id`, `frame_id`, `s3_uri`, `timestamp`, `frame_index`, plus `model`, `embedding_dim`, `s3_etag`, `s3_last_modified`. Point id: existing id for that `s3_uri`, else a stable hash of `s3_uri`.
 
-This path did **not** write Elasticsearch, FAISS dumps, or SigLIP2 vectors.
+This path does **not** write Elasticsearch, FAISS dumps, or SigLIP2 vectors.
+
+#### Run locally
+
+Needs a reachable S3 prefix of **already-cut** keyframe JPEGs and a local (or other) Qdrant. Empty placeholder names only in [`offline/.env.example`](../offline/.env.example).
+
+```bash
+cd offline
+python -m venv .venv && source .venv/bin/activate
+pip install -r requirements.txt
+# install torch for your CUDA/CPU — see offline/README.md
+cp .env.example .env          # AWS_* + QDRANT_* ; do not commit .env
+
+# local Qdrant (same Compose as the API, or a one-off container)
+#   cd ../backend && docker compose up -d qdrant
+
+python run_indexing.py --s3-uri s3://YOUR_BUCKET/YOUR_PREFIX/
+
+# optional Jina CLIP v2
+python run_indexing.py \
+  --model-id jinaai/jina-clip-v2 \
+  --model-name jinav2 \
+  --qdrant-collection keyframes_jinav2_final
+```
+
+CLI defaults and modes are listed in [`offline/README.md`](../offline/README.md). Delete a collection with `python clear_qdrant_collection.py --yes`.
 
 ---
 
@@ -250,4 +275,4 @@ Qdrant: start a local node, then `AUTO_RESTORE_SNAPSHOT=true` to load the SigLIP
 - How corpus OCR, ASR, captions, and object entities were written into `frame_db.db` (including whether PhoWhisper was used for corpus ASR).
 - A writer for `data/local_index/vectors_fp16.npy`.
 - A builder for CCTV `cams.json`.
-- The `offline/` Python package itself (removed from this tree; behavior above is from that export).
+- How (or whether) the `offline/` OpenCLIP / Jina collection was used in the finalist serving stack (serving today restores a SigLIP2 snapshot).
