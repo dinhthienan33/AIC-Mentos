@@ -1,0 +1,16 @@
+.env
+.env.*
+!.env.example
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.hf_home/
+.cache/
+*.bin
+*.pt
+*.pth
+*.onnx
+*.safetensors
+*.log
+.DS_Store
