@@ -1,0 +1,57 @@
+# Secrets and local env
+.env
+.env.*
+!.env.example
+!**/.env.example
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+.venv/
+venv/
+.envrc
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.egg-info/
+.coverage
+htmlcov/
+
+# Node / frontend
+node_modules/
+build/
+dist/
+.cache/
+*.log
+
+# Local data, indexes, models, datasets
+backend/data/
+backend/datav3/
+backend/datav2/
+**/*.db
+**/*.snapshot
+**/*.bin
+**/*.faiss
+**/*.npy
+**/*.pt
+**/*.pth
+**/*.onnx
+**/*.safetensors
+
+# Tunnel / TLS credentials (never commit)
+cloudflared/
+**/*.pem
+**/*credentials*.json
+**/*.p12
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Notebook / junk
+.ipynb_checkpoints/
+**/temp/
